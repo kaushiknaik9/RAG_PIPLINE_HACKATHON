@@ -1,0 +1,78 @@
+import os
+import tempfile
+import streamlit as st
+from langchain_ollama import OllamaEmbeddings, ChatOllama
+from langchain_qdrant import QdrantVectorStore
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+st.title("Local RAG over PDF (Ollama + Qdrant)")
+
+# 1) Upload PDF
+uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
+
+if uploaded_file is not None:
+    # Save uploaded file to a temp path so PyPDFLoader can read it
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(uploaded_file.getvalue())
+        tmp_path = tmp.name
+
+    st.success(f"Loaded file: {uploaded_file.name}")
+
+    # 2) Load and chunk
+    loader = PyPDFLoader(tmp_path)
+    docs = loader.load()
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+    )
+    chunks = splitter.split_documents(docs)
+
+    # 3) Build in‑memory vector store (per upload)
+    embeddings = OllamaEmbeddings(model="mxbai-embed-large")
+    vector_db = QdrantVectorStore.from_documents(
+        documents=chunks,
+        embedding=embeddings,
+        url="http://localhost:6333",
+        collection_name="rag",  # or f"rag_{uploaded_file.name}"
+        prefer_grpc=False,
+    )
+
+    llm = ChatOllama(model="llama3.2:3b")
+
+    # 4) Ask question
+    user_query = st.text_input("Ask something about this PDF:")
+
+    if st.button("Ask") and user_query.strip():
+        search_results = vector_db.similarity_search(user_query, k=4)
+
+        content = "\n\n".join(
+            [
+                f"Page Content: {r.page_content}\n"
+                f"Page Number: {r.metadata.get('page_label')}\n"
+                f"File Location: {r.metadata.get('source')}"
+                for r in search_results
+            ]
+        )
+
+        system_prompt = f"""
+        You are a helpful AI Assistant who answers user queries based on the available
+        content retrieved from a PDF file along with page contents and page numbers.
+        You should only answer the user based on the following content and navigate
+        the user to open the right page number to know more.
+
+        Content:
+        {content}
+        """
+
+        with st.spinner("Thinking..."):
+            resp = llm.invoke(
+                [
+                    ("system", system_prompt),
+                    ("user", user_query),
+                ]
+            )
+
+        st.subheader("Answer")
+        st.write(resp.content)
