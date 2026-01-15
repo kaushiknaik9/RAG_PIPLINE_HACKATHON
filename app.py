@@ -4,8 +4,8 @@ import streamlit as st
 from dotenv import load_dotenv
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient  # Add this import
-from qdrant_client.models import Distance, VectorParams  # Add this import
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -41,20 +41,30 @@ if uploaded_file is not None:
     )
     chunks = splitter.split_documents(docs)
 
-    # 3) Build vector store (fixed for :memory: + remote)
+    # 3) Build vector store (fixed: create collection first for in-memory)
     embeddings = OllamaEmbeddings(model=EMBED_MODEL)
 
     if QDRANT_URL == ":memory:":
-        # In-memory client (no URL parsing)
+        # In-memory: Create collection explicitly
         client = QdrantClient(":memory:")
+        # Create collection if not exists
+        try:
+            client.get_collection(COLLECTION_NAME)
+        except ValueError:
+            client.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config=VectorParams(
+                    size=1024, distance=Distance.COSINE
+                ),  # mxbai dim=1024
+            )
         vector_db = QdrantVectorStore(
             client=client,
             collection_name=COLLECTION_NAME,
             embedding=embeddings,
         )
-        vector_db.add_documents(chunks)  # Add to in-memory
+        vector_db.add_documents(chunks)
     else:
-        # Remote/cloud URL
+        # Remote/cloud
         vector_db = QdrantVectorStore.from_documents(
             documents=chunks,
             embedding=embeddings,
