@@ -2,112 +2,48 @@ import os
 import tempfile
 import streamlit as st
 from dotenv import load_dotenv
+from langchain_community.vectorstores import FAISS
 from langchain_ollama import OllamaEmbeddings, ChatOllama
-from langchain_qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# Load environment variables
 load_dotenv()
 
-st.title("Local RAG over PDF (Ollama + Qdrant)")
+st.title("🔍 PDF RAG - Works Everywhere")
 
-# Config from .env
-QDRANT_URL = os.getenv("QDRANT_URL", ":memory:")
-COLLECTION_NAME = os.getenv("COLLECTION_NAME", "rag")
-EMBED_MODEL = os.getenv("EMBED_MODEL", "mxbai-embed-large")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2:3b")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2")
 
-# 1) Upload PDF
-uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
+uploaded_file = st.file_uploader("📄 Upload PDF", type="pdf")
 
-if uploaded_file is not None:
-    # Save uploaded file to a temp path so PyPDFLoader can read it
+if uploaded_file:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
 
-    st.success(f"Loaded file: {uploaded_file.name}")
+    st.success(f"✅ {uploaded_file.name} loaded")
 
-    # 2) Load and chunk
     loader = PyPDFLoader(tmp_path)
     docs = loader.load()
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     chunks = splitter.split_documents(docs)
 
-    # 3) Build vector store (fixed: create collection first for in-memory)
     embeddings = OllamaEmbeddings(model=EMBED_MODEL)
-
-    if QDRANT_URL == ":memory:":
-        # In-memory: Create collection explicitly
-        client = QdrantClient(":memory:")
-        # Create collection if not exists
-        try:
-            client.get_collection(COLLECTION_NAME)
-        except ValueError:
-            client.create_collection(
-                collection_name=COLLECTION_NAME,
-                vectors_config=VectorParams(
-                    size=1024, distance=Distance.COSINE
-                ),  # mxbai dim=1024
-            )
-        vector_db = QdrantVectorStore(
-            client=client,
-            collection_name=COLLECTION_NAME,
-            embedding=embeddings,
-        )
-        vector_db.add_documents(chunks)
-    else:
-        # Remote/cloud
-        vector_db = QdrantVectorStore.from_documents(
-            documents=chunks,
-            embedding=embeddings,
-            url=QDRANT_URL,
-            api_key=os.getenv("QDRANT_API_KEY"),
-            collection_name=COLLECTION_NAME,
-            prefer_grpc=False,
-        )
+    vectorstore = FAISS.from_documents(chunks, embeddings)
 
     llm = ChatOllama(model=LLM_MODEL)
 
-    # 4) Ask question
-    user_query = st.text_input("Ask something about this PDF:")
+    query = st.text_input("❓ Ask about PDF:")
+    if st.button("💡 Answer") and query:
+        docs_found = vectorstore.similarity_search(query, k=3)
+        context = "\n\n".join([doc.page_content for doc in docs_found])
 
-    if st.button("Ask") and user_query.strip():
-        search_results = vector_db.similarity_search(user_query, k=4)
+        prompt = f"Answer using ONLY this PDF:\n\n{context}\n\nQ: {query}"
 
-        content = "\n\n".join(
-            [
-                f"Page Content: {r.page_content}\n"
-                f"Page Number: {r.metadata.get('page_label')}\n"
-                f"File Location: {r.metadata.get('source')}"
-                for r in search_results
-            ]
-        )
+        with st.spinner("🧠 Answering..."):
+            response = llm.invoke(prompt)
 
-        system_prompt = f"""
-        You are a helpful AI Assistant who answers user queries based on the available
-        content retrieved from a PDF file along with page contents and page numbers.
-        You should only answer the user based on the following content and navigate
-        the user to open the right page number to know more.
+        st.subheader("📖 Answer")
+        st.write(response.content)
 
-        Content:
-        {content}
-        """
-
-        with st.spinner("Thinking..."):
-            resp = llm.invoke(
-                [
-                    ("system", system_prompt),
-                    ("user", user_query),
-                ]
-            )
-
-        st.subheader("Answer")
-        st.write(resp.content)
+st.caption("🚀 Powered by FAISS + Ollama | Works on mobile")
