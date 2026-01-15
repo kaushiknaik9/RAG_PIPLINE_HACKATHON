@@ -4,6 +4,8 @@ import streamlit as st
 from dotenv import load_dotenv
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient  # Add this import
+from qdrant_client.models import Distance, VectorParams  # Add this import
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -13,7 +15,7 @@ load_dotenv()
 st.title("Local RAG over PDF (Ollama + Qdrant)")
 
 # Config from .env
-QDRANT_URL = os.getenv("QDRANT_URL", ":memory:")  # Default to in-memory for dev
+QDRANT_URL = os.getenv("QDRANT_URL", ":memory:")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "rag")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "mxbai-embed-large")
 LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2:3b")
@@ -39,16 +41,28 @@ if uploaded_file is not None:
     )
     chunks = splitter.split_documents(docs)
 
-    # 3) Build vector store (in-memory or remote via .env)
+    # 3) Build vector store (fixed for :memory: + remote)
     embeddings = OllamaEmbeddings(model=EMBED_MODEL)
-    vector_db = QdrantVectorStore.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        url=QDRANT_URL,
-        api_key=os.getenv("QDRANT_API_KEY"),
-        collection_name=COLLECTION_NAME,
-        prefer_grpc=False,
-    )
+
+    if QDRANT_URL == ":memory:":
+        # In-memory client (no URL parsing)
+        client = QdrantClient(":memory:")
+        vector_db = QdrantVectorStore(
+            client=client,
+            collection_name=COLLECTION_NAME,
+            embedding=embeddings,
+        )
+        vector_db.add_documents(chunks)  # Add to in-memory
+    else:
+        # Remote/cloud URL
+        vector_db = QdrantVectorStore.from_documents(
+            documents=chunks,
+            embedding=embeddings,
+            url=QDRANT_URL,
+            api_key=os.getenv("QDRANT_API_KEY"),
+            collection_name=COLLECTION_NAME,
+            prefer_grpc=False,
+        )
 
     llm = ChatOllama(model=LLM_MODEL)
 
