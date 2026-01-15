@@ -1,12 +1,22 @@
 import os
 import tempfile
 import streamlit as st
+from dotenv import load_dotenv
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_qdrant import QdrantVectorStore
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+# Load environment variables
+load_dotenv()
+
 st.title("Local RAG over PDF (Ollama + Qdrant)")
+
+# Config from .env
+QDRANT_URL = os.getenv("QDRANT_URL", ":memory:")  # Default to in-memory for dev
+COLLECTION_NAME = os.getenv("COLLECTION_NAME", "rag")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "mxbai-embed-large")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2:3b")
 
 # 1) Upload PDF
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
@@ -29,17 +39,17 @@ if uploaded_file is not None:
     )
     chunks = splitter.split_documents(docs)
 
-    # 3) Build in‑memory vector store (per upload)
-    embeddings = OllamaEmbeddings(model="mxbai-embed-large")
+    # 3) Build vector store (in-memory or remote via .env)
+    embeddings = OllamaEmbeddings(model=EMBED_MODEL)
     vector_db = QdrantVectorStore.from_documents(
         documents=chunks,
         embedding=embeddings,
-        url="http://localhost:6333",
-        collection_name="rag",  # or f"rag_{uploaded_file.name}"
+        url=QDRANT_URL,  # ":memory:", "http://localhost:6333", or cloud URL
+        collection_name=COLLECTION_NAME,
         prefer_grpc=False,
     )
 
-    llm = ChatOllama(model="llama3.2:3b")
+    llm = ChatOllama(model=LLM_MODEL)
 
     # 4) Ask question
     user_query = st.text_input("Ask something about this PDF:")
