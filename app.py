@@ -44,7 +44,8 @@ if uploaded_file is not None:
     vector_db = QdrantVectorStore.from_documents(
         documents=chunks,
         embedding=embeddings,
-        url=QDRANT_URL,  # ":memory:", "http://localhost:6333", or cloud URL
+        url=QDRANT_URL,
+        api_key=os.getenv("QDRANT_API_KEY"),
         collection_name=COLLECTION_NAME,
         prefer_grpc=False,
     )
